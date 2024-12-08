@@ -1,0 +1,7 @@
+tushare
+pandas
+torch
+numpy
+plotly
+pandas_market_calendars
+streamlit
