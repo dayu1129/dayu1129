@@ -200,7 +200,7 @@ def predict_future(model, dataset, future_days=5, device='cpu',predict_value='cl
     future_preds = np.array(future_preds) * (close_max - close_min) + close_min
     return future_preds
 
-def plot_results(df, preds, actuals, future_preds=None, predict_value='close'):
+def plot_results(df,name, preds, actuals, future_preds=None, predict_value='close'):
     step = len(df) - len(preds)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df['trade_date'].iloc[step:], y=preds, name='Prediction'))
@@ -217,7 +217,7 @@ def plot_results(df, preds, actuals, future_preds=None, predict_value='close'):
             name='Future Predictions'
         ))
 
-    fig.update_layout(title=f'Stock Price Prediction ({predict_value})',
+    fig.update_layout(title=f'{name} Prediction ({predict_value})',
                       xaxis_title='Date',
                       yaxis_title='Price',
                       template='ggplot2',
@@ -250,7 +250,7 @@ def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, pre
     future_preds = predict_future(trained_model, dataset, future_days=future_days_len, device=device, predict_value=predict_value)
 
     # 绘图结果
-    fig = plot_results(df, preds, actuals, future_preds, predict_value=predict_value)
+    fig = plot_results(df,name, preds, actuals, future_preds, predict_value=predict_value)
 
     return preds, actuals, future_preds, fig
 
