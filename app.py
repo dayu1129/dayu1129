@@ -255,7 +255,7 @@ def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, pre
     return preds, actuals, future_preds, fig
 
 # ------------------- Streamlit部分 -------------------
-st.title("股票价格预测模型")
+st.title("价格模型by dayu")
 
 # 用户输入参数
 stock_code = st.text_input("请输入股票代码(形如'000001.SZ'):", value="000001.SZ")
