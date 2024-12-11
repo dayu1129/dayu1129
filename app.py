@@ -200,6 +200,31 @@ def predict_future(model, dataset, future_days=5, device='cpu',predict_value='cl
     future_preds = np.array(future_preds) * (close_max - close_min) + close_min
     return future_preds
 
+def validate_and_tune_model(model, dataset, validation_steps=10, step=30, device='cpu', predict_value='close'):
+    model.eval()
+    validation_results = []
+    for i in range(validation_steps):
+        start_idx = -dataset.step * (i + 2)
+        end_idx = -dataset.step * (i + 1)
+        X = dataset.X[start_idx:end_idx, :].unsqueeze(0).to(device)
+        y_actual = dataset.y[end_idx - 1].item()
+
+        with torch.no_grad():
+            y_pred = model(X).item()
+
+        # 反归一化
+        y_pred = y_pred * (dataset.close_max - dataset.close_min) + dataset.close_min
+        y_actual = y_actual * (dataset.close_max - dataset.close_min) + dataset.close_min
+
+        validation_results.append((y_actual, y_pred))
+
+    # 根据验证结果计算误差并优化
+    errors = [abs(actual - pred) for actual, pred in validation_results]
+    avg_error = sum(errors) / len(errors)
+    st.write(f'Validation Average Error: {avg_error:.6f}')
+
+    return model
+
 def plot_results(df,name, preds, actuals, future_preds=None, predict_value='close'):
     step = len(df) - len(preds)
     fig = go.Figure()
@@ -242,6 +267,9 @@ def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, pre
 
     # 训练模型
     trained_model = train_model(net, data_loader, epochs=epoch, step=step, device=device)
+
+    # 验证并调整模型
+    trained_model = validate_and_tune_model(trained_model, dataset, validation_steps=10, step=step, device=device, predict_value=predict_value)
 
     # 评估模型
     preds, actuals = evaluate_model(trained_model, data_loader, df=df, step=step, device=device, predict_value=predict_value)
