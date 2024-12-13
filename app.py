@@ -318,7 +318,7 @@ def stock_prediction(api,name, start_time, future_days_len=5, step=30, epoch=10,
 
 # ------------------- Streamlit部分 -------------------
 st.title("价格预测模型 by dayu")
-api_type=st.text_input("Tushare api:", value='1a3e0639da9b72985daf214412e5f964db261dd6b036fdf29bf23c05')
+api_type=st.text_input("Tushare api:", value='0df188bb899ea67bb04923fee9de2a6f14b33499c6273a9c0a5da76b')
 stock_code = st.text_input("请输入股票代码(形如'000001.SZ'):", value="000001.SZ")
 start_date = st.date_input("选择起始日期:", value=datetime.date(2023,1,1))
 future_days = st.number_input("预测未来天数:", min_value=1, value=5)
