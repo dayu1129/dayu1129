@@ -271,7 +271,7 @@ def plot_results(df, name, preds, actuals, future_preds=None, predict_value='clo
                       height=600)
     return fig
 
-def get_related_stocks(name, trade_date='20211012', top_n=100):
+def get_related_stocks(name, trade_date='20211012', top_n=50):
     df_bak = pro.bak_basic(trade_date=trade_date, fields='trade_date,ts_code,name,industry,pe')
     if df_bak.empty:
         raise ValueError("基础股票数据为空，请检查日期和请求参数。")
@@ -288,13 +288,13 @@ def get_related_stocks(name, trade_date='20211012', top_n=100):
 
     return related_stocks
 
-def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes'):
+def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes',related_stocks_number=50):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # 加载主股票数据（包含宏观数据）
     df_main = load_data(name, start_time)
     df_merged = df_main
     if related_stocks=='Yes':
-        related_stocks_code=get_related_stocks(name=stock_code,)
+        related_stocks_code=get_related_stocks(name=stock_code,top_n=related_stocks_number)
         for stk in  related_stocks_code:
             df_stk = load_data(stk, start_time)
             # 重命名相关股票的列
@@ -338,7 +338,8 @@ step = st.number_input("输入时间窗口长度step:", min_value=1, value=5)
 epoch = st.number_input("训练轮数epoch:", min_value=1, value=10)
 predict_value = st.selectbox("预测值选择:", ["close", "open", "high", "low"])
 model_type = st.selectbox("选择模型类型:", ["Net", "NetWithAttention"])
-related_stocks_type=st.selectbox("选择相关板块的100只股票:", ["Yes", "NO"])
+related_stocks_type=st.selectbox("是否选择相关板块的股票:", ["Yes", "NO"])
+related_stocks_number_type=st.number_input("相关板块的股票数量:", min_value=10, value=20)
 # 示例相关股票列表（可根据您的需求获取，也可留空）
 
 
@@ -352,7 +353,9 @@ if st.button("开始预测"):
                                                                 epoch=epoch,
                                                                 predict_value=predict_value,
                                                                 model_type=model_type,
-                                                                related_stocks=related_stocks_type) # 如果需要相关股票，在此传入列表
+                                                                related_stocks=related_stocks_type,
+                                                                related_stocks_number=related_stocks_number_type
+                                                                ) # 如果需要相关股票，在此传入列表
             st.success("预测完成！")
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
