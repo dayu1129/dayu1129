@@ -11,7 +11,8 @@ import streamlit as st
 import datetime
 
 # 设置Tushare的Token（请使用你的个人Token）
-pro = ts.pro_api()
+ts.set_token('')
+pro = None  
 cn_market = mcal.get_calendar('SSE')
 
 from pandas.api.types import is_numeric_dtype
@@ -101,6 +102,10 @@ class NetWithAttention(nn.Module):
         return output
 
 def load_single_stock_data(name, start_time):
+    global pro
+    if pro is None:
+        # 如果pro未定义，请在调用该函数前保证ts.set_token和pro = ts.pro_api()已执行
+        raise ValueError("pro未定义，请确保在调用此函数前完成Tushare的初始化。")
     start_time = start_time.replace("-", "")
     df = pro.daily(ts_code=name, start_date=start_time)
     if df.empty:
@@ -111,27 +116,14 @@ def load_single_stock_data(name, start_time):
     return df
 
 def load_data(main_stock, start_time, data_file='filled_merged_data.csv'):
-    """
-    加载目标股票数据 + 宏观数据并合并
-    """
-    # 主股票数据
     df_main = load_single_stock_data(main_stock, start_time)
-    
-    # 宏观数据
     df_macro = pd.read_csv(data_file)
     df_macro['trade_date'] = df_macro['trade_date'].astype(str)
-
-    # 将主股票与宏观数据合并
     df_merged = pd.merge(df_macro, df_main, on='trade_date')
-
     df_merged = df_merged.sort_values(by='trade_date', ascending=True)
-    # 增加目标股票的mean列 (可根据需求增删)
     df_merged['mean'] = (df_merged['open'] + df_merged['close']) / 2
     df_merged = df_merged.reset_index(drop=True)
-
-    # 对缺失数据进行适当填充（如果有）
     df_merged = df_merged.fillna(method='ffill').fillna(method='bfill')
-
     return df_merged
 
 def train_model(model, dataloader, epochs=10, step=30, lr=0.001, device='cpu'):
@@ -287,32 +279,28 @@ def get_related_stocks(name, trade_date='20211012', top_n=50):
     return related_stocks
 
 def stock_prediction(api,name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes',related_stocks_number=50):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # 加载主股票数据（包含宏观数据）
+    global pro
     ts.set_token(api)
-    pro = ts.pro_api()
+    pro = ts.pro_api()  # 在此处初始化pro
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     df_main = load_data(name, start_time)
     df_merged = df_main
     if related_stocks=='Yes':
-        related_stocks_code=get_related_stocks(name=stock_code,top_n=related_stocks_number)
+        related_stocks_code=get_related_stocks(name=name,top_n=related_stocks_number)
         for stk in  related_stocks_code:
             df_stk = load_data(stk, start_time)
-            # 重命名相关股票的列
             feature_cols = [c for c in df_stk.columns if c not in ['trade_date']]
             rename_dict = {col: f"{col}_{stk}" for col in feature_cols}
             df_stk = df_stk.rename(columns=rename_dict)
-            # 基于trade_date将相关股票的数据合并到df_merged中(横向合并)
             df_merged = pd.merge(df_merged, df_stk, on='trade_date', how='left')
 
-        # 对缺失数据进行填充
         df_merged = df_merged.fillna(method='ffill').fillna(method='bfill')
 
-    # 用合并后的df构建数据集
     df = df_merged
     dataset = StockData(data=df, step=step, predict_value=predict_value)
     input_size = dataset.X.size(-1)
 
-    # 使用固定batch_size，确保有多个batch（如果数据太少，请根据情况调整）
     data_loader = DataLoader(dataset=dataset, batch_size=32, shuffle=False)
 
     if model_type == 'Net':
