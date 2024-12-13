@@ -11,9 +11,7 @@ import streamlit as st
 import datetime
 
 # 设置Tushare的Token（请使用你的个人Token）
-ts.set_token('1a3e0639da9b72985daf214412e5f964db261dd6b036fdf29bf23c05')
 pro = ts.pro_api()
-
 cn_market = mcal.get_calendar('SSE')
 
 from pandas.api.types import is_numeric_dtype
@@ -288,9 +286,11 @@ def get_related_stocks(name, trade_date='20211012', top_n=50):
 
     return related_stocks
 
-def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes',related_stocks_number=50):
+def stock_prediction(api,name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes',related_stocks_number=50):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # 加载主股票数据（包含宏观数据）
+    ts.set_token(api)
+    pro = ts.pro_api()
     df_main = load_data(name, start_time)
     df_merged = df_main
     if related_stocks=='Yes':
@@ -330,7 +330,7 @@ def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, pre
 
 # ------------------- Streamlit部分 -------------------
 st.title("价格预测模型 by dayu")
-
+api_type=st.text_input("Tushare api:", value='1a3e0639da9b72985daf214412e5f964db261dd6b036fdf29bf23c05')
 stock_code = st.text_input("请输入股票代码(形如'000001.SZ'):", value="000001.SZ")
 start_date = st.date_input("选择起始日期:", value=datetime.date(2023,1,1))
 future_days = st.number_input("预测未来天数:", min_value=1, value=5)
@@ -346,7 +346,8 @@ related_stocks_number_type=st.number_input("相关板块的股票数量:", min_v
 if st.button("开始预测"):
     with st.spinner("模型训练中，请稍候..."):
         try:
-            preds, actuals, future_preds, fig = stock_prediction(name=stock_code,
+            preds, actuals, future_preds, fig = stock_prediction(api=api_type,
+                                                                 name=stock_code,
                                                                 start_time=start_date.strftime("%Y%m%d"),
                                                                 future_days_len=future_days,
                                                                 step=step,
