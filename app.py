@@ -14,23 +14,28 @@ import datetime
 ts.set_token('1a3e0639da9b72985daf214412e5f964db261dd6b036fdf29bf23c05')
 pro = ts.pro_api()
 
-# 创建中国股市的交易日历（上证所）
 cn_market = mcal.get_calendar('SSE')
 
+from pandas.api.types import is_numeric_dtype
+
 class StockData(Dataset):
-    def __init__(self, data, step=30,predict_value='close'):
+    def __init__(self, data, step=30, predict_value='close'):
         """
-        data: 包含特征和目标值的数据集 DataFrame
+        data: 已经包含目标股票和辅助股票特征的 DataFrame
         step: 时间序列长度
         """
         self.step = step
-        # 特征列（请根据你的数据列实际情况进行调整）
-        self.features = ['open', 'high', 'close', 'low', 'vol', 'pct_chg', 'amount', 
-                         'mean', 'change', 'RIFSPFF_N.WW', 'RIFSPBLP_N.WW', 'RIFSRP_F02_N.WW']
+        # 仅提取数值型特征列，并排除trade_date
+        numeric_cols = [col for col in data.columns if col != 'trade_date' and is_numeric_dtype(data[col])]
+        self.features = numeric_cols
+        
         data_arr = data[self.features].values
         self.len = len(data_arr)
 
-        # 记录close列最大最小值用于反归一化
+        # 确保predict_value在self.features中
+        if predict_value not in self.features:
+            raise ValueError(f"预测列 {predict_value} 不存在于特征列中，请检查数据。")
+
         self.close_col_idx = self.features.index(predict_value)
         self.close_max = data_arr[:, self.close_col_idx].max()
         self.close_min = data_arr[:, self.close_col_idx].min()
@@ -46,15 +51,26 @@ class StockData(Dataset):
         return self.len - 1 - self.step
 
     def normalize(self, data):
-        """
-        简单归一化到[0,1]
-        """
         data = data.T
         for i in range(len(data)):
             data_min = data[i].min()
             data_max = data[i].max()
             data[i] = (data[i] - data_min) / (data_max - data_min + 1e-9)
         return data.T
+
+
+class Attention(nn.Module):
+    def __init__(self, hidden_size):
+        super(Attention, self).__init__()
+        self.attention_weights = nn.Linear(hidden_size, 1)
+
+    def forward(self, lstm_outputs):
+        batch_size, seq_len, hidden_dim = lstm_outputs.size()
+        attn_scores = self.attention_weights(lstm_outputs.reshape(-1, hidden_dim))
+        attn_scores = attn_scores.reshape(batch_size, seq_len)
+        attn_weights = torch.softmax(attn_scores, dim=1)
+        context_vector = torch.sum(attn_weights.unsqueeze(-1) * lstm_outputs, dim=1)
+        return context_vector
 
 class Net(nn.Module):
     def __init__(self, input_size=12, hidden_size=30, output_size=1, num_layers=3, dropout=0.3):
@@ -70,22 +86,6 @@ class Net(nn.Module):
         X = self.linear(X)
         return X
 
-class Attention(nn.Module):
-    def __init__(self, hidden_size):
-        super(Attention, self).__init__()
-        self.attention_weights = nn.Linear(hidden_size, 1)
-
-    def forward(self, lstm_outputs):
-        # lstm_outputs: [batch_size, seq_len, hidden_dim]
-        batch_size, seq_len, hidden_dim = lstm_outputs.size()
-        # 计算注意力分数
-        attn_scores = self.attention_weights(lstm_outputs.reshape(-1, hidden_dim))
-        attn_scores = attn_scores.reshape(batch_size, seq_len)
-        attn_weights = torch.softmax(attn_scores, dim=1)
-        context_vector = torch.sum(attn_weights.unsqueeze(-1) * lstm_outputs, dim=1)
-        return context_vector
-
-
 class NetWithAttention(nn.Module):
     def __init__(self, input_size=12, hidden_size=30, output_size=1, num_layers=3, dropout=0.3):
         super(NetWithAttention, self).__init__()
@@ -97,32 +97,42 @@ class NetWithAttention(nn.Module):
 
     def forward(self, X):
         lstm_out, _ = self.lstm(X)
-        # 使用注意力层获取上下文向量
         context_vector = self.attention(lstm_out)
         context_vector = self.dropout(context_vector)
         output = self.linear(context_vector)
         return output
 
-
-def load_data(name, start_time, data_file='filled_merged_data.csv'):
-    """
-    从Tushare获取指定股票数据并与本地宏观数据合并
-    """
+def load_single_stock_data(name, start_time):
     start_time = start_time.replace("-", "")
     df = pro.daily(ts_code=name, start_date=start_time)
-    df_macro = pd.read_csv(data_file)
     if df.empty:
         raise ValueError("股票数据为空，请检查股票代码和起始日期。")
-
-    df_macro['trade_date'] = df_macro['trade_date'].astype(str)
+    # 提取所需的特征列(可根据实际需求调整)
+    df = df[['trade_date','open','high','close','low','vol','pct_chg','amount','change']]
     df['trade_date'] = df['trade_date'].astype(str)
-    df_merged = pd.merge(df_macro, df, on='trade_date')
+    return df
 
-    df_merged = df_merged[['trade_date', 'open', 'high', 'close', 'low', 'vol', 'pct_chg',
-                           'amount', 'change', 'RIFSPFF_N.WW', 'RIFSPBLP_N.WW', 'RIFSRP_F02_N.WW']]
+def load_data(main_stock, start_time, data_file='filled_merged_data.csv'):
+    """
+    加载目标股票数据 + 宏观数据并合并
+    """
+    # 主股票数据
+    df_main = load_single_stock_data(main_stock, start_time)
+    
+    # 宏观数据
+    df_macro = pd.read_csv(data_file)
+    df_macro['trade_date'] = df_macro['trade_date'].astype(str)
+
+    # 将主股票与宏观数据合并
+    df_merged = pd.merge(df_macro, df_main, on='trade_date')
+
     df_merged = df_merged.sort_values(by='trade_date', ascending=True)
+    # 增加目标股票的mean列 (可根据需求增删)
     df_merged['mean'] = (df_merged['open'] + df_merged['close']) / 2
     df_merged = df_merged.reset_index(drop=True)
+
+    # 对缺失数据进行适当填充（如果有）
+    df_merged = df_merged.fillna(method='ffill').fillna(method='bfill')
 
     return df_merged
 
@@ -132,8 +142,12 @@ def train_model(model, dataloader, epochs=10, step=30, lr=0.001, device='cpu'):
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step, gamma=0.9)
     model.to(device)
 
-    # 使用80%数据作为训练，其余为验证
+    # 使用dataloader大小的80%作为训练集
+    # len(dataloader)是batch数，若batch为1，则无法划分
+    # 建议在DataLoader中设置较小batch_size从而有多个batch
     train_len = int(len(dataloader) * 0.8)
+    if train_len < 1:
+        train_len = len(dataloader)  # 如果只有一个batch，那就全用于训练
 
     for epoch in range(epochs):
         model.train()
@@ -194,7 +208,6 @@ def predict_future(model, dataset, future_days=5, device='cpu',predict_value='cl
             new_step = new_step.unsqueeze(0)
             current_input = torch.cat([current_input, new_step.unsqueeze(0)], dim=1)[:, 1:, :]
 
-    # 反归一化未来预测
     close_max = dataset.close_max
     close_min = dataset.close_min
     future_preds = np.array(future_preds) * (close_max - close_min) + close_min
@@ -203,6 +216,10 @@ def predict_future(model, dataset, future_days=5, device='cpu',predict_value='cl
 def validate_and_tune_model(model, dataset, validation_steps=10, step=30, device='cpu', predict_value='close'):
     model.eval()
     validation_results = []
+    # 若数据量不够，这里可能会有越界问题，请根据数据长度微调validation_steps
+    available_steps = len(dataset) // dataset.step
+    validation_steps = min(validation_steps, available_steps - 1)
+
     for i in range(validation_steps):
         start_idx = -dataset.step * (i + 2)
         end_idx = -dataset.step * (i + 1)
@@ -212,30 +229,34 @@ def validate_and_tune_model(model, dataset, validation_steps=10, step=30, device
         with torch.no_grad():
             y_pred = model(X).item()
 
-        # 反归一化
         y_pred = y_pred * (dataset.close_max - dataset.close_min) + dataset.close_min
         y_actual = y_actual * (dataset.close_max - dataset.close_min) + dataset.close_min
 
         validation_results.append((y_actual, y_pred))
 
-    # 根据验证结果计算误差并优化
     errors = [abs(actual - pred) for actual, pred in validation_results]
-    avg_error = sum(errors) / len(errors)
-    st.write(f'Validation Average Error: {avg_error:.6f}')
+    if len(errors) > 0:
+        avg_error = sum(errors) / len(errors)
+        st.write(f'Validation Average Error: {avg_error:.6f}')
 
     return model
 
-def plot_results(df,name, preds, actuals, future_preds=None, predict_value='close'):
+def plot_results(df, name, preds, actuals, future_preds=None, predict_value='close'):
+    # step这里用于对齐预测值和真实值，但请确保preds与actuals长度一致
     step = len(df) - len(preds)
+    if step < 0:
+        step = 0
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df['trade_date'].iloc[step:], y=preds, name='Prediction'))
     fig.add_trace(go.Scatter(x=df['trade_date'].iloc[step:], y=actuals, name='Actual'))
-    fig.add_trace(go.Scatter(x=df['trade_date'].iloc[step:], y=df['change'], name='Change'))
+    if 'change' in df.columns:
+        fig.add_trace(go.Scatter(x=df['trade_date'].iloc[step:], y=df['change'].iloc[step:], name='Change'))
 
-    # 预测未来的日期（使用工作日频率）
     if future_preds is not None:
         last_date = pd.to_datetime(df['trade_date'].iloc[-1])
-        future_dates = pd.bdate_range(start=last_date, periods=len(future_preds)+1)[1:]
+        # 使用工作日频率生成未来日期
+        future_dates = pd.date_range(start=last_date, periods=len(future_preds)+1, freq='B')[1:]
         fig.add_trace(go.Scatter(
             x=future_dates,
             y=future_preds,
@@ -250,51 +271,77 @@ def plot_results(df,name, preds, actuals, future_preds=None, predict_value='clos
                       height=600)
     return fig
 
-def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net'):
+def get_related_stocks(name, trade_date='20211012', top_n=100):
+    df_bak = pro.bak_basic(trade_date=trade_date, fields='trade_date,ts_code,name,industry,pe')
+    if df_bak.empty:
+        raise ValueError("基础股票数据为空，请检查日期和请求参数。")
+
+    main_info = df_bak[df_bak['ts_code'] == name]
+    if main_info.empty:
+        raise ValueError(f"未在bak_basic中找到主股票 {name} 的信息。")
+
+    main_industry = main_info.iloc[0]['industry']
+    same_industry_stocks = df_bak[df_bak['industry'] == main_industry]
+    same_industry_stocks = same_industry_stocks[same_industry_stocks['ts_code'] != name]
+    same_industry_stocks = same_industry_stocks.sort_values(by='pe', ascending=True)
+    related_stocks = same_industry_stocks['ts_code'].head(top_n).tolist()
+
+    return related_stocks
+
+def stock_prediction(name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes'):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    df = load_data(name, start_time)
+    # 加载主股票数据（包含宏观数据）
+    df_main = load_data(name, start_time)
+    df_merged = df_main
+    if related_stocks=='Yes':
+        related_stocks_code=get_related_stocks(name=stock_code,)
+        for stk in  related_stocks_code:
+            df_stk = load_data(stk, start_time)
+            # 重命名相关股票的列
+            feature_cols = [c for c in df_stk.columns if c not in ['trade_date']]
+            rename_dict = {col: f"{col}_{stk}" for col in feature_cols}
+            df_stk = df_stk.rename(columns=rename_dict)
+            # 基于trade_date将相关股票的数据合并到df_merged中(横向合并)
+            df_merged = pd.merge(df_merged, df_stk, on='trade_date', how='left')
+
+        # 对缺失数据进行填充
+        df_merged = df_merged.fillna(method='ffill').fillna(method='bfill')
+
+    # 用合并后的df构建数据集
+    df = df_merged
     dataset = StockData(data=df, step=step, predict_value=predict_value)
-    input_size = dataset.X.size(-1)  # 动态获取输入维度
+    input_size = dataset.X.size(-1)
 
-    # DataLoader
-    data_loader = DataLoader(dataset=dataset, batch_size=len(df.T)-1, shuffle=False)
+    # 使用固定batch_size，确保有多个batch（如果数据太少，请根据情况调整）
+    data_loader = DataLoader(dataset=dataset, batch_size=32, shuffle=False)
 
-    # 根据选择的模型类型初始化模型
     if model_type == 'Net':
         net = Net(input_size=input_size)
     else:
         net = NetWithAttention(input_size=input_size)
 
-    # 训练模型
     trained_model = train_model(net, data_loader, epochs=epoch, step=step, device=device)
-
-    # 验证并调整模型
     trained_model = validate_and_tune_model(trained_model, dataset, validation_steps=10, step=step, device=device, predict_value=predict_value)
-
-    # 评估模型
     preds, actuals = evaluate_model(trained_model, data_loader, df=df, step=step, device=device, predict_value=predict_value)
-
-    # 预测未来
     future_preds = predict_future(trained_model, dataset, future_days=future_days_len, device=device, predict_value=predict_value)
 
-    # 绘图结果
-    fig = plot_results(df,name, preds, actuals, future_preds, predict_value=predict_value)
-
+    fig = plot_results(df, name, preds, actuals, future_preds, predict_value=predict_value)
     return preds, actuals, future_preds, fig
 
 # ------------------- Streamlit部分 -------------------
-st.title("价格模型by dayu")
+st.title("价格预测模型 by dayu")
 
-# 用户输入参数
 stock_code = st.text_input("请输入股票代码(形如'000001.SZ'):", value="000001.SZ")
-start_date = st.date_input("选择起始日期:", value=datetime.date(2022,8,25))
+start_date = st.date_input("选择起始日期:", value=datetime.date(2023,1,1))
 future_days = st.number_input("预测未来天数:", min_value=1, value=5)
 step = st.number_input("输入时间窗口长度step:", min_value=1, value=5)
 epoch = st.number_input("训练轮数epoch:", min_value=1, value=10)
 predict_value = st.selectbox("预测值选择:", ["close", "open", "high", "low"])
 model_type = st.selectbox("选择模型类型:", ["Net", "NetWithAttention"])
+related_stocks_type=st.selectbox("选择相关板块的100只股票:", ["Yes", "NO"])
+# 示例相关股票列表（可根据您的需求获取，也可留空）
 
-# 按钮提交
+
 if st.button("开始预测"):
     with st.spinner("模型训练中，请稍候..."):
         try:
@@ -304,7 +351,8 @@ if st.button("开始预测"):
                                                                 step=step,
                                                                 epoch=epoch,
                                                                 predict_value=predict_value,
-                                                                model_type=model_type)
+                                                                model_type=model_type,
+                                                                related_stocks=related_stocks_type) # 如果需要相关股票，在此传入列表
             st.success("预测完成！")
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
