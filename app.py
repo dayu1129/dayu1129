@@ -262,7 +262,7 @@ def plot_results(df, name, preds, actuals, future_preds=None, predict_value='clo
     return fig
 
 def get_related_stocks(name, trade_date='20211012', top_n=50):
-    df_bak = pro.bak_basic(trade_date=trade_date, fields='trade_date,ts_code,name,industry,pe')
+    df_bak = pro.index_member_all(ts_code=name)
     if df_bak.empty:
         raise ValueError("基础股票数据为空，请检查日期和请求参数。")
 
@@ -270,12 +270,9 @@ def get_related_stocks(name, trade_date='20211012', top_n=50):
     if main_info.empty:
         raise ValueError(f"未在bak_basic中找到主股票 {name} 的信息。")
 
-    main_industry = main_info.iloc[0]['industry']
-    same_industry_stocks = df_bak[df_bak['industry'] == main_industry]
-    same_industry_stocks = same_industry_stocks[same_industry_stocks['ts_code'] != name]
-    same_industry_stocks = same_industry_stocks.sort_values(by='pe', ascending=True)
+    same_industry_stocks = df_bak[df_bak['ts_code'] != name]
+    same_industry_stocks = same_industry_stocks[same_industry_stocks['out_date']=='None']
     related_stocks = same_industry_stocks['ts_code'].head(top_n).tolist()
-
     return related_stocks
 
 def stock_prediction(api,name, start_time, future_days_len=5, step=30, epoch=10, predict_value='close', model_type='Net', related_stocks='Yes',related_stocks_number=50):
