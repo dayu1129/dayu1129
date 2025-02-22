@@ -117,9 +117,10 @@ def load_single_stock_data(name, start_time):
 
 def load_data(main_stock, start_time, data_file='filled_merged_data.csv'):
     df_main = load_single_stock_data(main_stock, start_time)
-    df_macro = pd.read_csv(data_file)
-    df_macro['trade_date'] = df_macro['trade_date'].astype(str)
-    df_merged = pd.merge(df_macro, df_main, on='trade_date')
+    # df_macro = pd.read_csv(data_file)
+    # df_macro['trade_date'] = df_macro['trade_date'].astype(str)
+    df_merged=df_main
+    # df_merged = pd.merge(df_macro, df_main, on='trade_date')
     df_merged = df_merged.sort_values(by='trade_date', ascending=True)
     df_merged['mean'] = (df_merged['open'] + df_merged['close']) / 2
     df_merged = df_merged.reset_index(drop=True)
